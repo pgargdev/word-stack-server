@@ -7,7 +7,7 @@ const cors = require('cors');
 const fs = require('fs');
 const seedrandom = require('seedrandom');
 const { Pool } = require('pg'); // Import the pg library
-const fetch = require('node-fetch'); // Import node-fetch for API calls
+const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args)); // Ensure node-fetch is imported correctly
 
 // 2. Initialize the Express app and Database Pool
 const app = express();
