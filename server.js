@@ -149,9 +149,16 @@ app.post('/api/daily-challenge/score', async (req, res) => {
     const validatedWords = new Set();
     for (const word of foundWords) {
         const lowerCaseWord = word.toLowerCase();
-        if (comprehensiveDict.has(lowerCaseWord) && canMakeWord(lowerCaseWord, dailyLetters) && !validatedWords.has(lowerCaseWord)) {
-            serverCalculatedScore += lowerCaseWord.length;
-            validatedWords.add(lowerCaseWord);
+        // Ensure the word exists in the dictionary, can be made from daily letters, and hasn't been used already
+        if (
+            comprehensiveDict.has(lowerCaseWord) && 
+            canMakeWord(lowerCaseWord, dailyLetters) && 
+            !validatedWords.has(lowerCaseWord)
+        ) {
+            serverCalculatedScore += lowerCaseWord.length; // Add the word's length to the score
+            validatedWords.add(lowerCaseWord); // Mark the word as validated
+        } else {
+            console.log(`Invalid word: ${lowerCaseWord}`);
         }
     }
 
