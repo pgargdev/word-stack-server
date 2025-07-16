@@ -131,6 +131,22 @@ app.get('/api/daily-challenge/leaderboard', async (req, res) => {
     }
 });
 
+async function validateWordWithAPI(word) {
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${word}`);
+            if (response.ok) return true; // Word is valid
+            console.log(`Invalid word: ${word} - Reason: Not found in external API.`);
+            return false; // Word is invalid
+        } catch (error) {
+            console.log(`API validation failed for word: ${word}. Attempt ${attempt} of ${maxRetries}. Reason: ${error.message}`);
+            if (attempt === maxRetries) return false; // Fail after max retries
+        }
+    }
+    return false;
+}
+
 app.post('/api/daily-challenge/score', async (req, res) => {
     const { name, foundWords } = req.body;
     if (!name || !Array.isArray(foundWords)) {
@@ -150,18 +166,15 @@ app.post('/api/daily-challenge/score', async (req, res) => {
     const validatedWords = new Set();
     for (const word of foundWords) {
         const lowerCaseWord = word.toLowerCase();
-        if (!comprehensiveDict.has(lowerCaseWord)) {
-            try {
-                const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${lowerCaseWord}`);
-                if (!response.ok) {
-                    console.log(`Invalid word: ${lowerCaseWord} - Reason: Not found in dictionary or external API.`);
-                    continue;
-                }
-            } catch (error) {
-                console.log(`Invalid word: ${lowerCaseWord} - Reason: External API validation failed.`);
-                continue;
-            }
+        let isValid = false;
+
+        if (comprehensiveDict.has(lowerCaseWord)) {
+            isValid = true; // Word is valid in the local dictionary
+        } else {
+            isValid = await validateWordWithAPI(lowerCaseWord); // Validate using external API
         }
+
+        if (!isValid) continue; // Skip invalid words
         if (!canMakeWord(lowerCaseWord, dailyLetters)) {
             console.log(`Invalid word: ${lowerCaseWord} - Reason: Cannot be formed using daily letters.`);
             continue;
@@ -170,6 +183,7 @@ app.post('/api/daily-challenge/score', async (req, res) => {
             console.log(`Invalid word: ${lowerCaseWord} - Reason: Duplicate word.`);
             continue;
         }
+
         serverCalculatedScore += lowerCaseWord.length;
         validatedWords.add(lowerCaseWord);
     }
