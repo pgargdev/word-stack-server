@@ -7,6 +7,7 @@ const cors = require('cors');
 const fs = require('fs');
 const seedrandom = require('seedrandom');
 const { Pool } = require('pg'); // Import the pg library
+const fetch = require('node-fetch'); // Import node-fetch for API calls
 
 // 2. Initialize the Express app and Database Pool
 const app = express();
@@ -150,8 +151,16 @@ app.post('/api/daily-challenge/score', async (req, res) => {
     for (const word of foundWords) {
         const lowerCaseWord = word.toLowerCase();
         if (!comprehensiveDict.has(lowerCaseWord)) {
-            console.log(`Invalid word: ${lowerCaseWord} - Reason: Not found in dictionary.`);
-            continue;
+            try {
+                const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${lowerCaseWord}`);
+                if (!response.ok) {
+                    console.log(`Invalid word: ${lowerCaseWord} - Reason: Not found in dictionary or external API.`);
+                    continue;
+                }
+            } catch (error) {
+                console.log(`Invalid word: ${lowerCaseWord} - Reason: External API validation failed.`);
+                continue;
+            }
         }
         if (!canMakeWord(lowerCaseWord, dailyLetters)) {
             console.log(`Invalid word: ${lowerCaseWord} - Reason: Cannot be formed using daily letters.`);
