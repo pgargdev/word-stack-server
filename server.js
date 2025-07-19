@@ -147,6 +147,22 @@ async function validateWordWithAPI(word) {
     return false;
 }
 
+async function fetchWordMeaningFromServer(word) {
+    try {
+        const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${word}`);
+        if (!response.ok) return `<div class="mb-3"><h4 class="text-lg font-bold text-amber-400 capitalize">${word}</h4><p class="text-slate-300 italic text-sm">No definition found.</p></div>`;
+
+        const data = await response.json();
+        const firstMeaning = data[0].meanings[0];
+        const definition = firstMeaning.definitions[0].definition;
+        const partOfSpeech = firstMeaning.partOfSpeech;
+        return `<div class="mb-3"><h4 class="text-lg font-bold text-amber-400 capitalize">${word}</h4><p class="text-slate-300 italic text-sm">(${partOfSpeech}) ${definition}</p></div>`;
+    } catch (error) {
+        console.error("Server error fetching definition for", word, error);
+        return `<div class="mb-3"><h4 class="text-lg font-bold text-amber-400 capitalize">${word}</h4><p class="text-slate-300 italic text-sm">Could not fetch definition.</p></div>`;
+    }
+}
+
 app.post('/api/daily-challenge/score', async (req, res) => {
     const { name, foundWords } = req.body;
     if (!name || !Array.isArray(foundWords)) {
@@ -188,12 +204,21 @@ app.post('/api/daily-challenge/score', async (req, res) => {
         validatedWords.add(lowerCaseWord);
     }
 
+    // Fetch meanings for validated words
+    const meaningsHtml = await Promise.all(
+        Array.from(validatedWords).map(word => fetchWordMeaningFromServer(word))
+    );
+
     const today = getTodayDateString();
     const sql = `INSERT INTO scores (name, score, date) VALUES ($1, $2, $3)`;
     try {
         await pool.query(sql, [name, serverCalculatedScore, today]);
         console.log(`A new score has been added: ${name} - ${serverCalculatedScore}`);
-        res.status(201).json({ success: true, validatedScore: serverCalculatedScore });
+        res.status(201).json({
+            success: true,
+            validatedScore: serverCalculatedScore,
+            meanings: meaningsHtml.join('')
+        });
     } catch (err) {
         console.error(err.stack);
         res.status(500).json({ error: 'Failed to save score.' });
