@@ -9,6 +9,11 @@ const seedrandom = require('seedrandom');
 const { Pool } = require('pg'); // Import the pg library
 const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args)); // Ensure node-fetch is imported correctly
 
+// API Configuration
+const RAPIDAPI_KEY = '74ec17ba35msh4eb1b447a986a98p13b04cjsn6c5c6e75e29b';
+const RAPIDAPI_HOST = 'wordsapiv1.p.rapidapi.com';
+const API_TIMEOUT = 2000; // 2 seconds
+
 // 2. Initialize the Express app and Database Pool
 const app = express();
 const PORT = process.env.PORT || 3000; // Render provides the PORT env var
@@ -131,41 +136,117 @@ app.get('/api/daily-challenge/leaderboard', async (req, res) => {
     }
 });
 
-async function validateWordWithAPI(word) {
-    const maxRetries = 3;
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-            const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${word}`);
-            if (response.ok) return true; // Word is valid
-            console.log(`Invalid word: ${word} - Reason: Not found in external API.`);
-            return false; // Word is invalid
-        } catch (error) {
-            console.log(`API validation failed for word: ${word}. Attempt ${attempt} of ${maxRetries}. Reason: ${error.message}`);
-            if (attempt === maxRetries) return false; // Fail after max retries
+app.get('/api/ai-words', (req, res) => {
+    const { letters } = req.query;
+    if (!letters) return res.status(400).json({ error: 'Letters are required.' });
+
+    const aiWords = [];
+    for (const word of comprehensiveDict) {
+        if (canMakeWord(word, letters.split(''))) {
+            aiWords.push(word);
         }
     }
-    return false;
+    res.json({ words: aiWords });
+});
+
+async function fetchWithFallback(word) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
+
+    // --- Attempt 1: dictionaryapi.dev ---
+    try {
+        const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${word}`, {
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        if (response.ok) {
+            const data = await response.json();
+            const firstMeaning = data[0].meanings[0];
+            return {
+                success: true,
+                word: data[0].word,
+                partOfSpeech: firstMeaning.partOfSpeech,
+                definition: firstMeaning.definitions[0].definition
+            };
+        }
+    } catch (error) {
+        clearTimeout(timeoutId);
+        console.warn(`dictionaryapi.dev failed for "${word}". Trying RapidAPI.`, error.name === 'AbortError' ? 'Timeout' : error);
+    }
+
+    // --- Attempt 2: RapidAPI (Fallback) ---
+    try {
+        console.log(`[RapidAPI] Attempting to fetch definition for "${word}"`);
+        const response = await fetch(`https://wordsapiv1.p.rapidapi.com/words/${word}/definitions`, {
+            method: 'GET',
+            headers: {
+                'X-RapidAPI-Key': RAPIDAPI_KEY,
+                'X-RapidAPI-Host': RAPIDAPI_HOST
+            }
+        });
+        if (response.ok) {
+            const data = await response.json();
+            console.log(`[RapidAPI] Successfully fetched data for "${word}":`, data);
+            if (data.definitions && data.definitions.length > 0) {
+                return {
+                    success: true,
+                    word: data.word,
+                    partOfSpeech: data.definitions[0].partOfSpeech,
+                    definition: data.definitions[0].definition
+                };
+            }
+        }
+    } catch (error) {
+        console.error(`RapidAPI fallback also failed for "${word}".`, error);
+    }
+
+    return { success: false, error: "Both APIs failed to provide a definition." };
+}
+
+
+async function validateWordWithAPI(word) {
+    const result = await fetchWithFallback(word);
+    if (!result.success) {
+        console.log(`Invalid word: ${word} - Reason: Not found in any external API.`);
+    }
+    return result.success;
+}
+
+function escapeHtml(unsafe) {
+    return unsafe
+         .replace(/&/g, "&amp;")
+         .replace(/</g, "&lt;")
+         .replace(/>/g, "&gt;")
+         .replace(/"/g, "&quot;")
+         .replace(/'/g, "&#039;");
 }
 
 async function fetchWordMeaningFromServer(word) {
-    try {
-        const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${word}`);
-        if (!response.ok) return `<div class="mb-3"><h4 class="text-lg font-bold text-amber-400 capitalize">${word}</h4><p class="text-slate-300 italic text-sm">No definition found.</p></div>`;
+    const result = await fetchWithFallback(word);
+    const safeWord = escapeHtml(word);
 
-        const data = await response.json();
-        const firstMeaning = data[0].meanings[0];
-        const definition = firstMeaning.definitions[0].definition;
-        const partOfSpeech = firstMeaning.partOfSpeech;
-        return `<div class="mb-3"><h4 class="text-lg font-bold text-amber-400 capitalize">${word}</h4><p class="text-slate-300 italic text-sm">(${partOfSpeech}) ${definition}</p></div>`;
-    } catch (error) {
-        console.error("Server error fetching definition for", word, error);
-        return `<div class="mb-3"><h4 class="text-lg font-bold text-amber-400 capitalize">${word}</h4><p class="text-slate-300 italic text-sm">Could not fetch definition.</p></div>`;
+    if (result.success) {
+        return `<div class="mb-3"><h4 class="text-lg font-bold text-amber-400 capitalize">${escapeHtml(result.word)}</h4><p class="text-slate-300 italic text-sm">(${escapeHtml(result.partOfSpeech)}) ${escapeHtml(result.definition)}</p></div>`;
+    } else {
+        console.error("Server error fetching definition for", word, result.error);
+        return `<div class="mb-3"><h4 class="text-lg font-bold text-amber-400 capitalize">${safeWord}</h4><p class="text-slate-300 italic text-sm">Could not fetch definition.</p></div>`;
     }
 }
 
 app.post('/api/daily-challenge/score', async (req, res) => {
     const { name, foundWords } = req.body;
     if (!name || !Array.isArray(foundWords)) {
+        return res.status(400).json({ error: 'Invalid data.' });
+    }
+
+    // Add a limit to prevent DoS attacks from very large payloads.
+    const MAX_WORDS = 200; 
+    if (foundWords.length > MAX_WORDS) {
+        return res.status(400).json({ error: `Submission limited to ${MAX_WORDS} words.` });
+    }
+
+    const safeName = escapeHtml(name.trim());
+    if (safeName.length === 0) {
         return res.status(400).json({ error: 'Invalid data.' });
     }
 
@@ -181,6 +262,10 @@ app.post('/api/daily-challenge/score', async (req, res) => {
     let serverCalculatedScore = 0;
     const validatedWords = new Set();
     for (const word of foundWords) {
+        // Ensure the item is a string before processing
+        if (typeof word !== 'string') {
+            continue;
+        }
         const lowerCaseWord = word.toLowerCase();
         let isValid = false;
 
@@ -212,8 +297,8 @@ app.post('/api/daily-challenge/score', async (req, res) => {
     const today = getTodayDateString();
     const sql = `INSERT INTO scores (name, score, date) VALUES ($1, $2, $3)`;
     try {
-        await pool.query(sql, [name, serverCalculatedScore, today]);
-        console.log(`A new score has been added: ${name} - ${serverCalculatedScore}`);
+        await pool.query(sql, [safeName, serverCalculatedScore, today]);
+        console.log(`A new score has been added: ${safeName} - ${serverCalculatedScore}`);
         res.status(201).json({
             success: true,
             validatedScore: serverCalculatedScore,
